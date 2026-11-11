@@ -1,0 +1,474 @@
+name: Build Levi Browser
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Write web files
+        run: |
+          mkdir -p www
+          echo "<html><body>Levi</body></html>" > www/index.html
+          cat > www/home.html <<'HTMLEOF'
+          <!DOCTYPE html>
+          <html lang="ar" dir="rtl">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width,initial-scale=1">
+          <title>ليفاي</title>
+          <style>
+          *{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}
+          body{background:#0b1020;color:#e8ecf8;font-family:system-ui,sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:48px 20px 24px}
+          .logo{width:72px;height:72px;border-radius:22px;background:linear-gradient(135deg,#7c5cff,#22d3ee);display:flex;align-items:center;justify-content:center;font-size:36px;font-weight:800;color:#fff;box-shadow:0 0 30px #7c5cff66}
+          h1{font-size:30px;margin:16px 0 4px;font-weight:700}
+          p{color:#8b94b3;margin-bottom:26px}
+          form{width:100%;max-width:520px;margin-bottom:30px}
+          input{width:100%;background:#141a2e;border:1px solid #1c2440;color:#e8ecf8;border-radius:30px;padding:15px 22px;font-size:16px;outline:none;font-family:inherit}
+          input:focus{border-color:#7c5cff}
+          input::placeholder{color:#8b94b3}
+          .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;width:100%;max-width:520px}
+          a{text-decoration:none;color:#e8ecf8;background:#141a2e;border:1px solid #1c2440;border-radius:18px;padding:14px 4px;text-align:center;font-size:13px}
+          a:active{background:#1c2440}
+          a span{display:block;font-size:26px;margin-bottom:6px}
+          </style>
+          </head>
+          <body>
+          <div class="logo">L</div>
+          <h1>ليفاي</h1>
+          <p>ابحث أو افتح أي موقع</p>
+          <form action="https://www.google.com/search" method="get"><input name="q" placeholder="ابحث بـ Google..." autocomplete="off"></form>
+          <div class="grid">
+            <a href="https://www.google.com"><span>🔎</span>Google</a>
+            <a href="https://m.youtube.com"><span>▶️</span>YouTube</a>
+            <a href="https://ar.wikipedia.org"><span>📚</span>ويكيبيديا</a>
+            <a href="https://github.com"><span>💻</span>GitHub</a>
+            <a href="https://web.telegram.org"><span>✈️</span>تيليغرام</a>
+            <a href="https://maps.google.com"><span>🗺️</span>خرائط</a>
+            <a href="https://translate.google.com"><span>🌐</span>ترجمة</a>
+            <a href="https://news.google.com"><span>📰</span>أخبار</a>
+          </div>
+          </body>
+          </html>
+          HTMLEOF
+      - name: Create Android project
+        run: |
+          npm init -y
+          npm i @capacitor/core @capacitor/cli @capacitor/android
+          npx cap init "Levi Browser" com.levi.browser --web-dir=www
+          npx cap add android
+          npx cap sync android
+      - name: Write browser code
+        run: |
+          mkdir -p android/app/src/main/java/com/levi/browser
+          cat > android/app/src/main/java/com/levi/browser/MainActivity.java <<'JAVAEOF'
+          package com.levi.browser;
+
+          import android.app.Activity;
+          import android.app.AlertDialog;
+          import android.app.DownloadManager;
+          import android.content.ClipData;
+          import android.content.ClipboardManager;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.graphics.Bitmap;
+          import android.graphics.Color;
+          import android.graphics.drawable.GradientDrawable;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.os.Environment;
+          import android.text.InputType;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.view.inputmethod.EditorInfo;
+          import android.view.inputmethod.InputMethodManager;
+          import android.webkit.CookieManager;
+          import android.webkit.URLUtil;
+          import android.webkit.ValueCallback;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebSettings;
+          import android.webkit.WebStorage;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.EditText;
+          import android.widget.FrameLayout;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          import android.widget.Toast;
+          import java.util.ArrayList;
+
+          public class MainActivity extends Activity {
+            static final int BG = 0xFF0B1020, SF = 0xFF141A2E, SF2 = 0xFF1C2440, TX = 0xFFE8ECF8, MU = 0xFF8B94B3, AC2 = 0xFF22D3EE;
+            static final String HOME = "file:///android_asset/public/home.html";
+            static final String DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+
+            ArrayList<WebView> tabs = new ArrayList<>();
+            int cur = -1;
+            boolean desktop = false;
+            FrameLayout content, progWrap;
+            View progFill;
+            EditText urlBar;
+            TextView tabBtn;
+            View customView;
+            WebChromeClient.CustomViewCallback customCb;
+            ValueCallback<Uri[]> fileCb;
+
+            int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density); }
+            void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_SHORT).show(); }
+            WebView curWeb() { return cur >= 0 ? tabs.get(cur) : null; }
+
+            @Override
+            protected void onCreate(Bundle b) {
+              setTheme(android.R.style.Theme_DeviceDefault_NoActionBar);
+              super.onCreate(b);
+
+              LinearLayout root = new LinearLayout(this);
+              root.setOrientation(LinearLayout.VERTICAL);
+              root.setBackgroundColor(SF);
+              root.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+              root.setOnApplyWindowInsetsListener((v, ins) -> {
+                v.setPadding(ins.getSystemWindowInsetLeft(), ins.getSystemWindowInsetTop(),
+                    ins.getSystemWindowInsetRight(), ins.getSystemWindowInsetBottom());
+                return ins;
+              });
+
+              LinearLayout top = new LinearLayout(this);
+              top.setOrientation(LinearLayout.HORIZONTAL);
+              top.setGravity(Gravity.CENTER_VERTICAL);
+              top.setPadding(dp(10), dp(8), dp(10), dp(8));
+              urlBar = new EditText(this);
+              GradientDrawable pill = new GradientDrawable();
+              pill.setColor(SF2);
+              pill.setCornerRadius(dp(22));
+              urlBar.setBackground(pill);
+              urlBar.setTextColor(TX);
+              urlBar.setHintTextColor(MU);
+              urlBar.setHint("ابحث أو اكتب رابط");
+              urlBar.setSingleLine(true);
+              urlBar.setTextSize(15);
+              urlBar.setPadding(dp(18), 0, dp(18), 0);
+              urlBar.setImeOptions(EditorInfo.IME_ACTION_GO);
+              urlBar.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+              urlBar.setOnEditorActionListener((v, a, e) -> { go(urlBar.getText().toString()); return true; });
+              urlBar.setOnFocusChangeListener((v, f) -> { if (f) urlBar.post(() -> urlBar.selectAll()); });
+              top.addView(urlBar, new LinearLayout.LayoutParams(0, dp(44), 1f));
+              root.addView(top, new LinearLayout.LayoutParams(-1, -2));
+
+              progWrap = new FrameLayout(this);
+              progWrap.setBackgroundColor(SF);
+              progFill = new View(this);
+              progFill.setBackgroundColor(AC2);
+              progWrap.addView(progFill, new FrameLayout.LayoutParams(0, -1));
+              progWrap.setVisibility(View.INVISIBLE);
+              root.addView(progWrap, new LinearLayout.LayoutParams(-1, dp(3)));
+
+              content = new FrameLayout(this);
+              content.setBackgroundColor(BG);
+              content.setFocusableInTouchMode(true);
+              root.addView(content, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+              LinearLayout bot = new LinearLayout(this);
+              bot.setOrientation(LinearLayout.HORIZONTAL);
+              bot.setBackgroundColor(SF);
+              bot.addView(btn("‹", 32, v -> { WebView w = curWeb(); if (w != null && w.canGoBack()) w.goBack(); }), lpw());
+              bot.addView(btn("›", 32, v -> { WebView w = curWeb(); if (w != null && w.canGoForward()) w.goForward(); }), lpw());
+              bot.addView(btn("↻", 24, v -> { WebView w = curWeb(); if (w != null) w.reload(); }), lpw());
+              bot.addView(btn("⌂", 26, v -> { WebView w = curWeb(); if (w != null) w.loadUrl(HOME); }), lpw());
+
+              LinearLayout tw = new LinearLayout(this);
+              tw.setGravity(Gravity.CENTER);
+              tabBtn = new TextView(this);
+              tabBtn.setGravity(Gravity.CENTER);
+              tabBtn.setTextColor(MU);
+              tabBtn.setTextSize(13);
+              GradientDrawable bd = new GradientDrawable();
+              bd.setColor(Color.TRANSPARENT);
+              bd.setCornerRadius(dp(6));
+              bd.setStroke(dp(2), MU);
+              tabBtn.setBackground(bd);
+              tw.addView(tabBtn, new LinearLayout.LayoutParams(dp(26), dp(26)));
+              tw.setOnClickListener(v -> showTabs());
+              bot.addView(tw, lpw());
+
+              bot.addView(btn("⋮", 26, v -> showMenu()), lpw());
+              root.addView(bot, new LinearLayout.LayoutParams(-1, -2));
+
+              setContentView(root);
+              CookieManager.getInstance().setAcceptCookie(true);
+              newTab(HOME);
+              content.requestFocus();
+            }
+
+            LinearLayout.LayoutParams lpw() { return new LinearLayout.LayoutParams(0, dp(52), 1f); }
+
+            TextView btn(String t, int size, View.OnClickListener l) {
+              TextView tv = new TextView(this);
+              tv.setText(t);
+              tv.setTextSize(size);
+              tv.setTextColor(MU);
+              tv.setGravity(Gravity.CENTER);
+              tv.setOnClickListener(l);
+              return tv;
+            }
+
+            void showProg(int p) {
+              if (p >= 100) { progWrap.setVisibility(View.INVISIBLE); return; }
+              progWrap.setVisibility(View.VISIBLE);
+              int w = progWrap.getWidth();
+              if (w == 0) w = getResources().getDisplayMetrics().widthPixels;
+              ViewGroup.LayoutParams lp = progFill.getLayoutParams();
+              lp.width = w * p / 100;
+              progFill.setLayoutParams(lp);
+            }
+
+            void setUrlText(String u) {
+              if (urlBar.hasFocus()) return;
+              if (u == null || u.startsWith("file:")) urlBar.setText("");
+              else urlBar.setText(u);
+            }
+
+            void go(String input) {
+              String t = input.trim();
+              if (t.isEmpty() || curWeb() == null) return;
+              String u;
+              if (t.startsWith("http://") || t.startsWith("https://") || t.startsWith("file:")) u = t;
+              else if (t.contains(".") && !t.contains(" ")) u = "https://" + t;
+              else u = "https://www.google.com/search?q=" + Uri.encode(t);
+              curWeb().loadUrl(u);
+              InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+              imm.hideSoftInputFromWindow(urlBar.getWindowToken(), 0);
+              content.requestFocus();
+            }
+
+            void applyMode(WebView w) {
+              WebSettings s = w.getSettings();
+              if (desktop) s.setUserAgentString(DESKTOP_UA);
+              else s.setUserAgentString(null);
+            }
+
+            void newTab(String url) {
+              WebView w = new WebView(this);
+              w.setBackgroundColor(BG);
+              WebSettings s = w.getSettings();
+              s.setJavaScriptEnabled(true);
+              s.setDomStorageEnabled(true);
+              s.setDatabaseEnabled(true);
+              s.setLoadWithOverviewMode(true);
+              s.setUseWideViewPort(true);
+              s.setSupportZoom(true);
+              s.setBuiltInZoomControls(true);
+              s.setDisplayZoomControls(false);
+              s.setMediaPlaybackRequiresUserGesture(false);
+              s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+              s.setJavaScriptCanOpenWindowsAutomatically(true);
+              CookieManager.getInstance().setAcceptThirdPartyCookies(w, true);
+              applyMode(w);
+
+              w.setWebViewClient(new WebViewClient() {
+                @Override
+                public void onPageStarted(WebView v, String u, Bitmap f) {
+                  if (v == curWeb()) { setUrlText(u); showProg(5); }
+                }
+                @Override
+                public void onPageFinished(WebView v, String u) {
+                  if (v == curWeb()) { setUrlText(u); showProg(100); }
+                }
+                @Override
+                public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
+                  String u = r.getUrl().toString();
+                  if (u.startsWith("http://") || u.startsWith("https://") || u.startsWith("file:")
+                      || u.startsWith("about:") || u.startsWith("data:") || u.startsWith("blob:")) return false;
+                  try {
+                    Intent i = Intent.parseUri(u, Intent.URI_INTENT_SCHEME);
+                    i.addCategory(Intent.CATEGORY_BROWSABLE);
+                    i.setComponent(null);
+                    i.setSelector(null);
+                    startActivity(i);
+                  } catch (Exception e) { }
+                  return true;
+                }
+              });
+
+              w.setWebChromeClient(new WebChromeClient() {
+                @Override
+                public void onProgressChanged(WebView v, int p) {
+                  if (v == curWeb()) showProg(p);
+                }
+                @Override
+                public void onShowCustomView(View view, CustomViewCallback cb) {
+                  if (customView != null) { cb.onCustomViewHidden(); return; }
+                  customView = view;
+                  customCb = cb;
+                  view.setBackgroundColor(0xFF000000);
+                  ((ViewGroup) getWindow().getDecorView()).addView(view, new FrameLayout.LayoutParams(-1, -1));
+                  getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN
+                      | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+                }
+                @Override
+                public void onHideCustomView() { hideCustom(); }
+                @Override
+                public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams p) {
+                  if (fileCb != null) fileCb.onReceiveValue(null);
+                  fileCb = cb;
+                  try {
+                    startActivityForResult(p.createIntent(), 1);
+                  } catch (Exception e) { fileCb = null; return false; }
+                  return true;
+                }
+              });
+
+              w.setDownloadListener((url, ua, cd, mime, len) -> {
+                try {
+                  DownloadManager.Request rq = new DownloadManager.Request(Uri.parse(url));
+                  rq.setMimeType(mime);
+                  String ck = CookieManager.getInstance().getCookie(url);
+                  if (ck != null) rq.addRequestHeader("cookie", ck);
+                  if (ua != null) rq.addRequestHeader("User-Agent", ua);
+                  rq.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
+                  rq.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, URLUtil.guessFileName(url, cd, mime));
+                  ((DownloadManager) getSystemService(Context.DOWNLOAD_SERVICE)).enqueue(rq);
+                  toast("بدأ التحميل");
+                } catch (Exception e) { toast("تعذر التحميل"); }
+              });
+
+              tabs.add(w);
+              switchTo(tabs.size() - 1);
+              w.loadUrl(url);
+            }
+
+            void switchTo(int i) {
+              content.removeAllViews();
+              cur = i;
+              WebView w = tabs.get(i);
+              content.addView(w, new FrameLayout.LayoutParams(-1, -1));
+              setUrlText(w.getUrl());
+              tabBtn.setText(String.valueOf(tabs.size()));
+              showProg(100);
+            }
+
+            void closeTab() {
+              if (tabs.size() == 1) { tabs.get(0).loadUrl(HOME); return; }
+              WebView w = tabs.remove(cur);
+              content.removeView(w);
+              w.destroy();
+              switchTo(Math.min(cur, tabs.size() - 1));
+            }
+
+            void showTabs() {
+              String[] items = new String[tabs.size() + 1];
+              for (int k = 0; k < tabs.size(); k++) {
+                WebView w = tabs.get(k);
+                String u = w.getUrl();
+                String t = w.getTitle();
+                if (t == null || t.isEmpty()) t = u;
+                if (u != null && u.startsWith("file:")) t = "الرئيسية";
+                if (t == null) t = "تبويب";
+                if (t.length() > 40) t = t.substring(0, 40);
+                items[k] = (k == cur ? "● " : "○ ") + t;
+              }
+              items[tabs.size()] = "＋ تبويب جديد";
+              new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                  .setTitle("التبويبات")
+                  .setItems(items, (d, which) -> {
+                    if (which == tabs.size()) newTab(HOME); else switchTo(which);
+                  })
+                  .setNeutralButton("إغلاق الحالي", (d, which) -> closeTab())
+                  .show();
+            }
+
+            void showMenu() {
+              String[] items = {
+                "تبويب جديد", "نسخ الرابط", "مشاركة الرابط", "فتح بمتصفح خارجي",
+                desktop ? "وضع الجوال" : "وضع سطح المكتب", "مسح السجل والكوكيز"
+              };
+              new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+                  .setItems(items, (d, which) -> {
+                    WebView w = curWeb();
+                    String u = w == null ? null : w.getUrl();
+                    boolean real = u != null && !u.startsWith("file:");
+                    if (which == 0) newTab(HOME);
+                    else if (which == 1) {
+                      if (!real) { toast("ما كو رابط"); return; }
+                      ((ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("url", u));
+                      toast("اننسخ الرابط");
+                    } else if (which == 2) {
+                      if (!real) { toast("ما كو رابط"); return; }
+                      Intent i = new Intent(Intent.ACTION_SEND);
+                      i.setType("text/plain");
+                      i.putExtra(Intent.EXTRA_TEXT, u);
+                      startActivity(Intent.createChooser(i, "مشاركة"));
+                    } else if (which == 3) {
+                      if (!real) { toast("ما كو رابط"); return; }
+                      try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(u))); } catch (Exception e) { toast("تعذر الفتح"); }
+                    } else if (which == 4) {
+                      desktop = !desktop;
+                      for (WebView t : tabs) applyMode(t);
+                      if (w != null) w.reload();
+                      toast(desktop ? "وضع سطح المكتب" : "وضع الجوال");
+                    } else if (which == 5) {
+                      CookieManager.getInstance().removeAllCookies(null);
+                      WebStorage.getInstance().deleteAllData();
+                      for (WebView t : tabs) { t.clearCache(true); t.clearHistory(); }
+                      toast("تم المسح");
+                    }
+                  })
+                  .show();
+            }
+
+            void hideCustom() {
+              if (customView == null) return;
+              ((ViewGroup) getWindow().getDecorView()).removeView(customView);
+              customView = null;
+              if (customCb != null) customCb.onCustomViewHidden();
+              customCb = null;
+              getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+            }
+
+            @Override
+            protected void onActivityResult(int rc, int res, Intent data) {
+              if (rc == 1) {
+                if (fileCb != null) {
+                  fileCb.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(res, data));
+                  fileCb = null;
+                }
+                return;
+              }
+              super.onActivityResult(rc, res, data);
+            }
+
+            @Override
+            public void onBackPressed() {
+              if (customView != null) { hideCustom(); return; }
+              WebView w = curWeb();
+              if (w != null && w.canGoBack()) { w.goBack(); return; }
+              if (tabs.size() > 1) { closeTab(); return; }
+              super.onBackPressed();
+            }
+
+            @Override
+            protected void onDestroy() {
+              for (WebView w : tabs) w.destroy();
+              super.onDestroy();
+            }
+          }
+          JAVAEOF
+          sed -i 's/<application/<application android:usesCleartextTraffic="true"/' android/app/src/main/AndroidManifest.xml
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Levi-Browser
+          path: android/app/build/outputs/apk/debug/app-debug.apk
